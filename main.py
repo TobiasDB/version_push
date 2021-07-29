@@ -58,8 +58,8 @@ def update_version_txt(bump='patch'):
         newverstr = str(ver[0]) + '.' + str(ver[1]) + '.' + str(ver[2])
 
     except (IndexError, ValueError, OSError):
-        newverstr = "0.0.0"
-        print(f"Could not find version string in ./version.txt, setting to default: {newverstr}")
+        print("Could not find version string in ./version.txt")
+        raise
     
     updatedfiles = []
 
@@ -82,7 +82,7 @@ def update_version_txt(bump='patch'):
     return updatedfiles
 
 
-def get_bump_from_message(message):
+def get_bump_from_message(message, default_bump='none'):
     """ 
     Return the bump type from the passed in commit 
     message based on convensional commits
@@ -90,13 +90,18 @@ def get_bump_from_message(message):
     params:
         message - Commmit message to be parsed
     """
-    if 'feat:' in message:
-        return 'minor'
-    elif 'breaking change:' in message:
-        return 'major'
-    else:
-        return 'patch'
+    tags = {
+        'patch': ['fix'],
+        'minor': ['feat'],
+        'major': ['breaking change', '!']
+    }
 
+    for bump, keywords in tags.items():
+        for keyword in keywords:
+            if keyword + ":" in message:
+                return bump
+
+    return default_bump
 
 def ci():
     """ TODO: Any CI specific steps """
@@ -107,6 +112,11 @@ def main():
     # Fetch the latest commit message
     #   Under CLI this is only used to maintain the latest commit message
     #   Under CI this is used to decide the bump type (MAJOR.MINOR.PATCH) based on convensional commits
+    local_branch = git('name-rev', '--name-only', 'HEAD')
+    remote_branch= git('for-each-ref' '--format="%(upstream:short)"', '"$(git symbolic-ref -q HEAD)"')
+    commit_messages = git('log' '{remote_branch}..{local_branch}')
+
+
     commitmessage = git('show', '-s', '--format=%s').strip().lower()
 
     # Until CI is implemented cmdline is always true
