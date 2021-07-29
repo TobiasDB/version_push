@@ -144,12 +144,19 @@ def main():
     commits = git('log', f'{remote_branch}..{local_branch}')
 
     # Extract only the commit messages from the commits
-    commit_messages = [item.strip().lower() for i, item in enumerate(commits.split('\n\n')) if i % 2 ==1]
+    commit_messages_reversed = [item.strip().lower() for i, item in enumerate(commits.split('\n\n')) if i % 2 ==1]
 
-    # Get them to get them in the correct chronological order
-    commit_messages.reverse() 
+    # Get the commit messages in the correct chronological order 
+    # And Ignore any messages before a previous (version bump)
+    commit_messages = []
+    for message in commit_messages_reversed:
+        if 'version bump' in message:
+            break
+        commit_messages.append(message)
 
-    print(f'Found {len(commit_messages)} on local branch ({local_branch}) not pushed to remote ({remote_branch})')
+
+    print(f'Found {len(commit_messages_reversed)} commits on local branch ({local_branch}) not pushed to remote ({remote_branch})')
+    print(f'{len(commit_messages_reversed) - len(commit_messages)} already versioned, there are {len(commit_messages)} commits to version:')
     [print(" - " + message) for message in commit_messages]
 
     # Until CI is implemented cmdline is always true
@@ -180,6 +187,7 @@ def main():
             git('add', file)
         if (len(updated_files)):
             last_message = commit_messages[len(commit_messages)-1]
+            print(last_message)
             if 'version bump' in last_message:
                 git('commit', '-m', last_message)
             else:
