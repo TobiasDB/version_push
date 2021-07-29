@@ -32,45 +32,59 @@ def commandline():
         help="Bump the current version by either: Major.Minor.Patch",
     )
 
+    parser.add_argument(
+        "-np", "--no-push",
+        help="If flag is passed the WILL BE versioned and committed but WILL NOT push (if no other flags are passed) ", 
+        action='store_false'
+    )
+
+    parser.add_argument(
+        "-nb", "--no-bump",
+        help="If flag is passed changes WILL BE committed and pushed but WILL NOT versioned (if no other flags are passed) ", 
+        action='store_false'
+    )
+
     cmd_args = vars(parser.parse_args())
 
     return cmd_args
 
 
-def update_version_txt(bump='patch'):
+def update_version_txt(bump):
     """ 
     Attempt to bump the verion in the version.txt file
 
     params:
         bump - 'major', 'minor' or 'patch' 
     """
+    updated_files = []
+
     try:
         with open('./version.txt', 'r') as versiontxt:
             verstr = versiontxt.readline()
 
         ver = verstr.split('.')
-        if bump == 'major':
-            ver[0] = int(ver[0]) + 1
-        elif bump == 'minor':
-            ver[1] = int(ver[1]) + 1
-        elif bump == 'patch':
-            ver[2] = int(ver[2]) + 1
+        ver[0] = int(ver[0]) + bump['major']
+        ver[1] = int(ver[1]) + bump['minor']
+        ver[2] = int(ver[2]) + bump['patch']
         newverstr = str(ver[0]) + '.' + str(ver[1]) + '.' + str(ver[2])
-
     except (IndexError, ValueError, OSError):
         print("Could not find version string in ./version.txt")
         raise
     
-    updatedfiles = []
+    # Output any change in version
+    print(f'v{verstr} ->  Bump: {bump}  -> v{newverstr}')
+
+    # Check if the version has changed to see if the files need to be updated
+    if newverstr == verstr:
+        return updated_files
 
     try:
-        print(f'v{verstr} ->  Bump: {bump}  -> v{newverstr}')
         for root, dirs, files in os.walk("."):
             for file in files:
                 if 'version.txt' == file:
                     # Get and save path to version.txt
                     path = os.path.join(root, file)
-                    updatedfiles.append(path)
+                    updated_files.append(path)
 
                     # Write new version to txt
                     with open(path, 'w') as versiontxt:
@@ -79,10 +93,10 @@ def update_version_txt(bump='patch'):
     except OSError as e:
         raise
 
-    return updatedfiles
+    return updated_files
 
 
-def get_bump_from_message(message, default_bump='none'):
+def get_bumps_from_messages(messages):
     """ 
     Return the bump type from the passed in commit 
     message based on convensional commits
@@ -91,17 +105,23 @@ def get_bump_from_message(message, default_bump='none'):
         message - Commmit message to be parsed
     """
     tags = {
-        'patch': ['fix'],
+        'major': ['breaking change', '!'],
         'minor': ['feat'],
-        'major': ['breaking change', '!']
+        'patch': ['fix'],
     }
+    bump = {'major': 0, 'minor':0, 'patch':0}
+    for message in messages:
+        for bump_type, keywords in tags.items():
+            message_done = False
+            for keyword in keywords:
+                if keyword + ":" in message:
+                    bump[bump_type] += 1
+                    message_done = True
+                    break
+            if message_done:
+                break
+    return bump
 
-    for bump, keywords in tags.items():
-        for keyword in keywords:
-            if keyword + ":" in message:
-                return bump
-
-    return default_bump
 
 def ci():
     """ TODO: Any CI specific steps """
@@ -109,41 +129,63 @@ def ci():
 
 
 def main():
-    # Fetch the latest commit message
-    #   Under CLI this is only used to maintain the latest commit message
-    #   Under CI this is used to decide the bump type (MAJOR.MINOR.PATCH) based on convensional commits
-    local_branch = git('name-rev', '--name-only', 'HEAD')
-    remote_branch= git('for-each-ref' '--format="%(upstream:short)"', '"$(git symbolic-ref -q HEAD)"')
-    commit_messages = git('log' '{remote_branch}..{local_branch}')
+    # Get the commit messages
 
+    # Get the name of the local branch
+    local_branch = git('name-rev', '--name-only', 'HEAD').strip().replace('\n', '')
 
-    commitmessage = git('show', '-s', '--format=%s').strip().lower()
+    # Get the name of the git head
+    git_head = git('symbolic-ref', '-q', 'HEAD').strip().replace('\n', '')
+
+    # Get the name of the remote branch
+    remote_branch= git('for-each-ref', '--format=%(upstream:short)', git_head).strip().replace('\n', '')
+
+    # Get the commits not yet pushed up to the remote
+    commits = git('log', f'{remote_branch}..{local_branch}')
+
+    # Extract only the commit messages from the commits
+    commit_messages = [item.strip().lower() for i, item in enumerate(commits.split('\n\n')) if i % 2 ==1]
+
+    # Get them to get them in the correct chronological order
+    commit_messages.reverse() 
+
+    print(f'Found {len(commit_messages)} on local branch ({local_branch}) not pushed to remote ({remote_branch})')
+    [print(" - " + message) for message in commit_messages]
 
     # Until CI is implemented cmdline is always true
     cmdline = True
-
+    bump = {'major': 0, 'minor':0, 'patch':0}
+    push = True
+    shouldBump = True
     # Get the bump version
     if cmdline:
         args = commandline()
+        push = args['no_push']
+        shouldBump = args['no_bump']
         if args['bump']:
-            bump = args['bump']
+            bump[args['bump']] = 1
         else:
-            bump = get_bump_from_message(commitmessage)
+            bump = get_bumps_from_messages(commit_messages)
     else:
-        bump = get_bump_from_message(commitmessage)
+        bump = get_bumps_from_messages(commit_messages)
 
     # Update the version.txt
-    updatedfiles = update_version_txt(bump)
+    updated_files = []
+    if shouldBump:
+        updated_files = update_version_txt(bump)
 
     # Recommit and push up the changes
     try:
-        for file in updatedfiles:
+        for file in updated_files:
             git('add', file)
-        if 'AutoSemVerBump' in commitmessage:
-            git('commit', '-m', commitmessage)
-        else:
-            git('commit', '-m', commitmessage + ' - (AutoSemVerBump)')
-        git('push')
+        if (len(updated_files)):
+            last_message = commit_messages[len(commit_messages)-1]
+            if 'version bump' in last_message:
+                git('commit', '-m', last_message)
+            else:
+                git('commit', '-m', last_message + ' - (version bump)')
+        if push:
+            git('push')
     except subprocess.CalledProcessError as e:
         print(f'Could not push code up to repository:\n{str(e)}')
         return 1
